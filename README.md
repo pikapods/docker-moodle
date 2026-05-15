@@ -207,6 +207,11 @@ build-time `WWW_DATA_UID`/`WWW_DATA_GID` rebuild above.
 
 Behind a reverse proxy this is invisible to end users.
 
+## Behind a TLS-terminating reverse proxy
+
+- `MOODLE_CFG_SSLPROXY=true` — treat the request as HTTPS even though the upstream hop is plain HTTP.
+- `MOODLE_CFG_REVERSEPROXY=true` — trust `X-Forwarded-For` for client-IP logging.
+
 ## `config.php` ownership model
 
 `/data/config/config.php` is **user state**, not a regenerated artifact —
