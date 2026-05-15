@@ -190,11 +190,14 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Push three refs to each registry:
+      # Push refs to each registry:
       #   <version>-php<minor>   fully qualified (e.g. v5.2.0-php8.3)
       #   <version>              plain Moodle version alias (e.g. v5.2.0) —
       #                          resolves to whichever PHP build this run produced
-      #   latest                 floating pointer to the most recent build
+      #   latest                 floating pointer — only published for stable
+      #                          releases (vMAJOR.MINOR.PATCH). Prerelease tags
+      #                          (-rc, -beta, -alpha) publish their own refs
+      #                          but do not promote 'latest'.
       #
       # docker save + docker push preserve the Docker manifest schema (not OCI),
       # which is what the podman HEALTHCHECK rationale in the Dockerfile depends on.
@@ -205,11 +208,20 @@ jobs:
           DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/docker-moodle
         run: |
           set -euo pipefail
+          # Promote 'latest' only for stable releases (vMAJOR.MINOR.PATCH).
+          # Prerelease tags (-rc, -beta, -alpha) get published under their own
+          # tag but must not float 'latest'.
+          is_stable=false
+          if [[ "${MOODLE_VER}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            is_stable=true
+          fi
           for REPO in "${REGISTRY}/${IMAGE_NAME}" "docker.io/${DOCKERHUB_REPO}"; do
             docker tag moodle:test "${REPO}:${IMAGE_TAG}"
             docker tag moodle:test "${REPO}:${MOODLE_VER}"
-            docker tag moodle:test "${REPO}:latest"
             docker push "${REPO}:${IMAGE_TAG}"
             docker push "${REPO}:${MOODLE_VER}"
-            docker push "${REPO}:latest"
+            if [ "${is_stable}" = "true" ]; then
+              docker tag moodle:test "${REPO}:latest"
+              docker push "${REPO}:latest"
+            fi
           done

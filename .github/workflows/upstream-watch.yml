@@ -9,10 +9,14 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   PHP_VERSION: "8.3"
-  # Pinned upstream series (major.minor). Auto-rebuilds only fire for patch
-  # bumps within this line, e.g. v5.2.0 -> v5.2.1. Bump this manually to opt
-  # into a new series (e.g. 5.3); use workflow_dispatch on build.yml for
-  # one-off out-of-series builds.
+  # Pinned upstream series (major.minor). Auto-rebuilds fire for any new
+  # release in this line — stable patch bumps (v5.2.0 -> v5.2.1) and
+  # prereleases alike (v5.2.0-rc1, v5.2.0-beta). Only stable releases
+  # promote the floating 'latest' tag; that gate lives in build.yml.
+  # The watcher is forward-only: it reacts to releases published in the
+  # last 24h, so it does not backfill historical prereleases on rollout
+  # or after a SERIES bump. Use workflow_dispatch on build.yml directly
+  # for one-off or out-of-series builds.
   SERIES: "5.2"
 
 jobs:
@@ -23,61 +27,78 @@ jobs:
       actions: write
       packages: read
     steps:
-      - name: Compare upstream release to published tags
+      - name: Find unbuilt upstream releases in series
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # `releases/latest` returns the most recent published GitHub
-          # Release. Moodle's stable releases are tagged vX.Y.Z. Weekly
-          # snapshot tags (with `+` suffix) are not published as Releases
-          # and won't appear here. The series guard below also rejects
-          # malformed tags via prefix/series mismatch.
-          upstream=$(gh api repos/moodle/moodle/releases/latest --jq .tag_name)
-          echo "upstream=${upstream}"
+          # Forward-only window. We don't want to backfill existing
+          # prereleases when this watcher rolls out — only react to
+          # releases published since the previous cycle. 24h covers a
+          # missed cron run (and then some) without going stateful.
+          cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
 
-          # Strip leading 'v' if present, then take everything before the last dot.
-          upstream_series="${upstream#v}"
-          upstream_series="${upstream_series%.*}"
-          if [ "${upstream_series}" != "${SERIES}" ]; then
-            echo "upstream ${upstream} is outside pinned series ${SERIES}; skipping auto-rebuild"
-            echo "published=true" >>"$GITHUB_OUTPUT"
+          # Unlike releases/latest, the releases list endpoint includes
+          # prereleases (rc, beta). We want those built too — build.yml
+          # gates the floating 'latest' tag on a stable version regex,
+          # so prereleases publish under their own tag only. Weekly
+          # snapshot tags (with '+' suffix) are not published as Releases
+          # and remain excluded here.
+          mapfile -t releases < <(
+            gh api 'repos/moodle/moodle/releases?per_page=20' \
+              --jq ".[] | select(.published_at >= \"${cutoff}\") | .tag_name"
+          )
+
+          if [ "${#releases[@]}" -eq 0 ]; then
+            echo "no releases published since ${cutoff}"
             exit 0
           fi
 
-          # Check the plain upstream tag (which includes the `v` prefix —
-          # image tags carry it too). PHP version is an implementation
-          # detail of the build, not part of the release identity, so a
-          # PHP_VERSION bump shouldn't mass-rebuild every existing release.
-          # For a one-off rebuild against a new PHP, dispatch build.yml directly.
-
-          # Ask GHCR's OCI registry whether the tag is already published.
-          # The token endpoint hands out anonymous pull tokens for public
-          # images; for private images, swap in a PAT with read:packages.
           token=$(curl -fsS "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
 
-          status=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Authorization: Bearer ${token}" \
-            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
-            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
-            "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${upstream}")
+          pending=()
+          for upstream in "${releases[@]}"; do
+            # Series guard. Strip leading 'v', drop any prerelease suffix,
+            # then take everything before the last dot to get MAJOR.MINOR.
+            base="${upstream#v}"
+            base="${base%%-*}"
+            series="${base%.*}"
+            if [ "${series}" != "${SERIES}" ]; then
+              echo "${upstream} outside series ${SERIES}; skipping"
+              continue
+            fi
 
-          if [ "${status}" = "200" ]; then
-            echo "published=true"  >>"$GITHUB_OUTPUT"
-            echo "${upstream} already published"
-          else
-            echo "published=false" >>"$GITHUB_OUTPUT"
-            echo "upstream=${upstream}" >>"$GITHUB_OUTPUT"
-            echo "${upstream} not in registry (HTTP ${status}); will trigger build"
-          fi
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${token}" \
+              -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+              -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+              "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${upstream}")
 
-      - name: Trigger build
-        if: steps.check.outputs.published == 'false'
+            if [ "${status}" = "200" ]; then
+              echo "${upstream} already published"
+            else
+              echo "${upstream} not in registry (HTTP ${status}); will trigger build"
+              pending+=("${upstream}")
+            fi
+          done
+
+          {
+            echo "pending<<EOF"
+            printf '%s\n' "${pending[@]}"
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Trigger builds
+        if: steps.check.outputs.pending != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PENDING: ${{ steps.check.outputs.pending }}
         run: |
-          gh workflow run build.yml \
-            -f moodle_version='${{ steps.check.outputs.upstream }}' \
-            -f php_version='${{ env.PHP_VERSION }}'
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            gh workflow run build.yml \
+              -f moodle_version="$tag" \
+              -f php_version="${PHP_VERSION}"
+          done <<<"$PENDING"
