@@ -1,0 +1,30 @@
+#!/command/with-contenv sh
+# Moodle cron — per-minute `php admin/cli/cron.php` loop.
+# Hard-kills a stuck tick (network stall, DB cursor wedge) before the next
+# minute. Approximates real cron's minute boundary without dragging in a
+# second supervisor.
+
+# Default-on; explicit-disable accepts the usual falsey spellings.
+case "${ENABLE_MOODLE_CRON:-TRUE}" in
+    [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Nn]|[Oo][Ff][Ff])
+        exec sleep infinity
+        ;;
+esac
+
+cd /var/www/html || exit 1
+
+# Skip until install has finished. The bootstrap entrypoint runs before s6
+# starts services, but if the operator misconfigured DB and install bailed,
+# don't busy-loop cron errors.
+while [ ! -s /data/config/config.php ]; do sleep 5; done
+
+while :; do
+    start=$(date +%s)
+    # BusyBox timeout (Alpine) uses short flags: -s SIG, -k SECS, then DURATION.
+    timeout -s TERM -k 5 55 \
+        php admin/cli/cron.php >&2 || true
+    elapsed=$(( $(date +%s) - start ))
+    if [ "$elapsed" -lt 60 ]; then
+        sleep $(( 60 - elapsed ))
+    fi
+done

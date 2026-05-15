@@ -1,0 +1,54 @@
+name: moodle
+
+services:
+  mariadb:
+    image: mariadb:11           # 10.11+ is Moodle 5.2 minimum; 11 is current LTS
+    environment:
+      MARIADB_DATABASE: moodle
+      MARIADB_USER: moodle
+      MARIADB_PASSWORD: changeme   # change before any real deployment
+      MARIADB_RANDOM_ROOT_PASSWORD: "yes"
+    command:
+      # utf8mb4 must be the *server* default (not just the connection charset)
+      # for Moodle's MariaDB checks to pass. innodb-file-per-table=ON is
+      # required by check_mysql_file_format / check_mysql_large_prefix.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-file-per-table=ON
+      - --skip-character-set-client-handshake
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 24                # MariaDB cold start is slower than postgres
+      start_period: 20s
+    restart: unless-stopped
+
+  moodle:
+    image: ${MOODLE_IMAGE:-ghcr.io/pikapods/docker-moodle:latest}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      MOODLE_URL: http://localhost:8080
+      DB_TYPE: mariadb
+      DB_HOST: mariadb
+      DB_NAME: moodle
+      DB_USER: moodle
+      DB_PASS: changeme
+      ADMIN_USER: admin
+      ADMIN_PASS: changeme
+      ADMIN_EMAIL: admin@example.com
+      SITE_FULLNAME: Moodle Demo
+      SITE_SHORTNAME: moodle
+    volumes:
+      - moodle-data:/data
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  mariadb-data:
+  moodle-data:

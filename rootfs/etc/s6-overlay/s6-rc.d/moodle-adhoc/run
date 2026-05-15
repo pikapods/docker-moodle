@@ -1,0 +1,19 @@
+#!/command/with-contenv sh
+# Moodle adhoc task worker — long-running with internal keep-alive.
+# `adhoc_task.php --keep-alive=59` blocks waiting for queued tasks and exits
+# naturally after the keep-alive window; we restart immediately.
+
+case "${ENABLE_MOODLE_ADHOC:-TRUE}" in
+    [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Nn]|[Oo][Ff][Ff])
+        exec sleep infinity
+        ;;
+esac
+
+cd /var/www/html || exit 1
+
+while [ ! -s /data/config/config.php ]; do sleep 5; done
+
+while :; do
+    php admin/cli/adhoc_task.php --execute --keep-alive=59 >&2 || true
+    sleep 5
+done
