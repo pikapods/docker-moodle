@@ -119,6 +119,10 @@ Both run as s6 long-runs inside the container. Moodle is broken without cron
 (notifications, queues, gradebook regrade, scheduled tasks), so the only
 sensible default is `TRUE`.
 
+The cron service invokes `admin/cli/cron.php --keep-alive=0` once per minute.
+This leaves scheduling cadence to the container wrapper and avoids Moodle's
+default 3-minute cron keep-alive being terminated by the wrapper timeout.
+
 ### Moodle `config.php` passthrough
 
 Any env var named `MOODLE_CFG_<KEY>` is patched into a managed block inside

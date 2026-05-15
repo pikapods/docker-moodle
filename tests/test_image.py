@@ -108,6 +108,17 @@ class TestImageFilesystem:
         r = _run("test", "-x", "/etc/s6-overlay/s6-rc.d/moodle-cron/run")
         assert r.returncode == 0, "moodle-cron run script missing or not executable"
 
+    def test_s6_cron_disables_internal_keepalive(self):
+        r = _run(
+            "grep", "-F",
+            "php admin/cli/cron.php --keep-alive=0",
+            "/etc/s6-overlay/s6-rc.d/moodle-cron/run",
+        )
+        assert r.returncode == 0, (
+            "moodle-cron should disable Moodle's internal keep-alive so the "
+            "wrapper timeout does not SIGTERM normal cron runs"
+        )
+
     def test_s6_adhoc_run_executable(self):
         r = _run("test", "-x", "/etc/s6-overlay/s6-rc.d/moodle-adhoc/run")
         assert r.returncode == 0, "moodle-adhoc run script missing or not executable"

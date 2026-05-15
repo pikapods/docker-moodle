@@ -1,8 +1,8 @@
 #!/command/with-contenv sh
 # Moodle cron — per-minute `php admin/cli/cron.php` loop.
-# Hard-kills a stuck tick (network stall, DB cursor wedge) before the next
-# minute. Approximates real cron's minute boundary without dragging in a
-# second supervisor.
+# Disable Moodle's internal cron keep-alive so this wrapper, not Moodle, owns
+# the per-minute cadence. The timeout remains as a guard for genuinely stuck
+# ticks.
 
 # Default-on; explicit-disable accepts the usual falsey spellings.
 case "${ENABLE_MOODLE_CRON:-TRUE}" in
@@ -22,7 +22,7 @@ while :; do
     start=$(date +%s)
     # BusyBox timeout (Alpine) uses short flags: -s SIG, -k SECS, then DURATION.
     timeout -s TERM -k 5 55 \
-        php admin/cli/cron.php >&2 || true
+        php admin/cli/cron.php --keep-alive=0 >&2 || true
     elapsed=$(( $(date +%s) - start ))
     if [ "$elapsed" -lt 60 ]; then
         sleep $(( 60 - elapsed ))
