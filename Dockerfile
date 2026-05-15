@@ -35,11 +35,14 @@ RUN apk add --no-cache \
     #   plus the always-on core set (curl, dom, hash, iconv, mbstring,
     #   openssl, simplexml, tokenizer, xml, xmlreader, etc.).
     # That leaves these six for install-php-extensions to compile in:
+    #   - mysqli: Moodle's native MySQL/MariaDB drivers require ext/mysqli;
+    #     pdo_mysql (already present) is not sufficient.
     #   - pgsql: Moodle's native postgres driver uses procedural pg_*;
     #     pdo_pgsql (already present) is not sufficient.
     #   - gd, intl, soap, exif, bcmath: required by Moodle 5.2
     #     environment.xml.
     && install-php-extensions \
+        mysqli \
         pgsql \
         gd \
         intl \

@@ -51,8 +51,8 @@ DB_PASS=${DB_PASS:-}
 DB_TYPE_RAW=${DB_TYPE:-mariadb}
 case "$DB_TYPE_RAW" in
     mariadb)
-        # Use Moodle's MariaDB-tuned driver class; the moodle docs explicitly
-        # recommend dbtype=mariadb (not mysqli) when the server is MariaDB.
+        # Use Moodle's MariaDB-specific driver. It is exposed only when the
+        # native mysqli PHP extension is installed.
         MOODLE_DBTYPE=mariadb
         DB_PROBE=mysql
         DB_PORT_DEFAULT=3306
@@ -84,6 +84,10 @@ ADMIN_USER=${ADMIN_USER:-admin}
 # 2. Ensure /data tree exists.
 # ---------------------------------------------------------------------------
 mkdir -p "$CONFIG_DIR" "$DATAROOT"
+# Moodle 5.2 writes require_once(__DIR__ . '/lib/setup.php') into config.php.
+# Because our canonical config.php lives in /data/config and is symlinked from
+# the app root, provide the expected relative lib path inside the volume.
+ln -sfn "$APP_DIR/lib" "$CONFIG_DIR/lib"
 # Moodle's default install.php --chmod is 2777; this matches the tree it would
 # create itself, but pre-creating lets us own the parent permission bits.
 chmod "$DATAROOT_CHMOD" "$DATAROOT" 2>/dev/null || \
