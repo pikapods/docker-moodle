@@ -80,6 +80,51 @@ jobs:
           path: /tmp/image.tar
           retention-days: 1
 
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: image
+          path: /tmp
+
+      - name: Load image
+        run: docker load -i /tmp/image.tar
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install test deps
+        run: pip install -r tests/requirements.txt
+
+      - name: Image + runtime tests
+        env:
+          IMAGE: moodle:test
+        run: pytest -v tests/ --junitxml=report.xml
+
+      - name: Dump moodle/mariadb container logs on failure
+        if: failure()
+        run: |
+          for c in $(docker ps -a --filter "name=^(moodle-|mdb-|moodle-uid)" --format '{{.Names}}'); do
+            echo "--- $c ---"
+            docker logs "$c" 2>&1 || true
+          done
+
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-report
+          path: report.xml
+          retention-days: 7
+
   compose-test:
     needs: build
     runs-on: ubuntu-latest
@@ -157,7 +202,7 @@ jobs:
         run: docker compose down -v
 
   publish:
-    needs: [build, compose-test]
+    needs: [build, test, compose-test]
     # Tag pushes always publish. Manual dispatch publishes unless the
     # `publish` input is set to false (test-only runs).
     if: github.event_name != 'workflow_dispatch' || inputs.publish
