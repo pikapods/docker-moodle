@@ -1,0 +1,83 @@
+name: Upstream watch
+
+on:
+  schedule:
+    - cron: "18 * * * *"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PHP_VERSION: "8.3"
+  # Pinned upstream series (major.minor). Auto-rebuilds only fire for patch
+  # bumps within this line, e.g. v5.2.0 -> v5.2.1. Bump this manually to opt
+  # into a new series (e.g. 5.3); use workflow_dispatch on build.yml for
+  # one-off out-of-series builds.
+  SERIES: "5.2"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+      packages: read
+    steps:
+      - name: Compare upstream release to published tags
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # `releases/latest` returns the most recent published GitHub
+          # Release. Moodle's stable releases are tagged vX.Y.Z. Weekly
+          # snapshot tags (with `+` suffix) are not published as Releases
+          # and won't appear here. The series guard below also rejects
+          # malformed tags via prefix/series mismatch.
+          upstream=$(gh api repos/moodle/moodle/releases/latest --jq .tag_name)
+          echo "upstream=${upstream}"
+
+          # Strip leading 'v' if present, then take everything before the last dot.
+          upstream_series="${upstream#v}"
+          upstream_series="${upstream_series%.*}"
+          if [ "${upstream_series}" != "${SERIES}" ]; then
+            echo "upstream ${upstream} is outside pinned series ${SERIES}; skipping auto-rebuild"
+            echo "published=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Check the plain upstream tag (which includes the `v` prefix —
+          # image tags carry it too). PHP version is an implementation
+          # detail of the build, not part of the release identity, so a
+          # PHP_VERSION bump shouldn't mass-rebuild every existing release.
+          # For a one-off rebuild against a new PHP, dispatch build.yml directly.
+
+          # Ask GHCR's OCI registry whether the tag is already published.
+          # The token endpoint hands out anonymous pull tokens for public
+          # images; for private images, swap in a PAT with read:packages.
+          token=$(curl -fsS "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
+
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${token}" \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+            "https://${REGISTRY}/v2/${IMAGE_NAME}/manifests/${upstream}")
+
+          if [ "${status}" = "200" ]; then
+            echo "published=true"  >>"$GITHUB_OUTPUT"
+            echo "${upstream} already published"
+          else
+            echo "published=false" >>"$GITHUB_OUTPUT"
+            echo "upstream=${upstream}" >>"$GITHUB_OUTPUT"
+            echo "${upstream} not in registry (HTTP ${status}); will trigger build"
+          fi
+
+      - name: Trigger build
+        if: steps.check.outputs.published == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build.yml \
+            -f moodle_version='${{ steps.check.outputs.upstream }}' \
+            -f php_version='${{ env.PHP_VERSION }}'
