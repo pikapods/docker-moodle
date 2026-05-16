@@ -55,17 +55,39 @@ jobs:
 
           cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
 
-          # Unlike releases/latest, the releases list endpoint includes
-          # prereleases (rc, beta). We want those built too — build.yml
-          # gates the floating 'latest' tag on a stable version regex,
-          # so prereleases publish under their own tag only. Weekly
-          # snapshot tags (with '+' suffix) are not published as
-          # Releases and remain excluded here.
-          all_releases_json=$(gh api 'repos/moodle/moodle/releases?per_page=20')
+          # Moodle does not publish GitHub Releases — only git tags.
+          # Fetch tag names + their target commit dates in a single
+          # GraphQL call. ALPHABETICAL DESC happens to surface the
+          # current series first for moodle (vMAJ.MIN sort), so 30 tags
+          # covers all recent activity. The forward-only 24h window
+          # filters by committedDate; this catches stable patch bumps
+          # and prereleases alike (rc, beta). Weekly snapshot tags
+          # (with '+' suffix) are not promoted to first-class tags and
+          # remain excluded.
+          all_tags_json=$(gh api graphql -f query='
+            {
+              repository(owner: "moodle", name: "moodle") {
+                refs(refPrefix: "refs/tags/", first: 30, orderBy: {field: ALPHABETICAL, direction: DESC}) {
+                  nodes {
+                    name
+                    target {
+                      ... on Commit { committedDate }
+                      ... on Tag { target { ... on Commit { committedDate } } }
+                    }
+                  }
+                }
+              }
+            }')
+
+          # Project to {name, date} so the rest of the script is shape-stable.
+          all_tags=$(echo "${all_tags_json}" | jq -c '[
+            .data.repository.refs.nodes[]
+            | {name, date: (.target.committedDate // .target.target.committedDate)}
+          ]')
 
           mapfile -t recent < <(
-            echo "${all_releases_json}" \
-              | jq -r ".[] | select(.published_at >= \"${cutoff}\") | .tag_name"
+            echo "${all_tags}" \
+              | jq -r --arg cutoff "${cutoff}" '.[] | select(.date >= $cutoff) | .name'
           )
 
           token=$(curl -fsS "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
@@ -105,8 +127,8 @@ jobs:
           # --- 2. Base-image drift detection (latest stable in-series only) ---
           series_re="^v${SERIES//./\\.}\.[0-9]+\$"
           latest_stable=$(
-            echo "${all_releases_json}" \
-              | jq -r '.[] | .tag_name' \
+            echo "${all_tags}" \
+              | jq -r '.[].name' \
               | grep -E "${series_re}" \
               | sort -V \
               | tail -n 1 || true
