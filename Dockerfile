@@ -8,16 +8,33 @@
 #     -t ghcr.io/pikapods/docker-moodle:v5.2.0 .
 
 ARG PHP_VERSION=8.3
-FROM serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
+# BASE_IMAGE is composed by build.yml as serversideup/php:<minor>-fpm-nginx-alpine
+# optionally suffixed with @sha256:... when the watcher resolved a digest. Local
+# builds without a digest fall through to the floating tag.
+ARG BASE_IMAGE=serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
+FROM ${BASE_IMAGE}
 
 ARG MOODLE_VERSION=v5.2.0
 ARG MOODLE_REPO=https://github.com/moodle/moodle
+
+# Build identity. IMAGE_REVISION is bumped by build.yml when the same
+# MOODLE_VERSION is rebuilt against a new base digest (security patch).
+# BASE_DIGEST is the resolved sha256 the FROM line pinned to; upstream-watch
+# reads it back off the published image to detect base-image drift.
+ARG IMAGE_REVISION=r1
+ARG BASE_DIGEST=
+ARG GIT_SHA=
+ARG BUILD_DATE=
 
 LABEL org.opencontainers.image.title="Moodle" \
       org.opencontainers.image.description="Self-maintained Moodle container" \
       org.opencontainers.image.source="https://github.com/pikapods/docker-moodle" \
       org.opencontainers.image.licenses="GPL-3.0" \
-      org.opencontainers.image.version="${MOODLE_VERSION}"
+      org.opencontainers.image.version="${MOODLE_VERSION}-${IMAGE_REVISION}" \
+      org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.base.name="serversideup/php:${PHP_VERSION}-fpm-nginx-alpine" \
+      org.opencontainers.image.base.digest="${BASE_DIGEST}"
 
 USER root
 

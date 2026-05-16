@@ -13,10 +13,23 @@ env:
   # release in this line — stable patch bumps (v5.2.0 -> v5.2.1) and
   # prereleases alike (v5.2.0-rc1, v5.2.0-beta). Only stable releases
   # promote the floating 'latest' tag; that gate lives in build.yml.
-  # The watcher is forward-only: it reacts to releases published in the
-  # last 24h, so it does not backfill historical prereleases on rollout
-  # or after a SERIES bump. Use workflow_dispatch on build.yml directly
-  # for one-off or out-of-series builds.
+  #
+  # Two independent triggers:
+  #
+  # 1. New-version detection. Forward-only 24h window — reacts to
+  #    releases published since the previous cycle, so it does not
+  #    backfill historical prereleases on rollout or after a SERIES
+  #    bump. Use workflow_dispatch on build.yml directly for one-off
+  #    or out-of-series builds.
+  #
+  # 2. Base-image drift detection. Resolves the current
+  #    serversideup/php digest and compares against the digest recorded
+  #    in the published image's OCI labels. Drift is scoped to the
+  #    latest stable in-series tag only — older patch releases and
+  #    prereleases are not rebuilt on drift. The rebuild bumps the
+  #    immutable -rN suffix and refreshes the mutable <version> tag in
+  #    place, so users pinned to v5.2.0 receive Alpine/PHP/nginx
+  #    security patches without re-pinning.
   SERIES: "5.2"
 
 jobs:
@@ -27,41 +40,45 @@ jobs:
       actions: write
       packages: read
     steps:
-      - name: Find unbuilt upstream releases in series
+      - uses: imjasonh/setup-crane@v0.4
+
+      - name: Find builds to trigger
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # Forward-only window. We don't want to backfill existing
-          # prereleases when this watcher rolls out — only react to
-          # releases published since the previous cycle. 24h covers a
-          # missed cron run (and then some) without going stateful.
+          BASE_REF="serversideup/php:${PHP_VERSION}-fpm-nginx-alpine"
+          current_digest=$(crane digest "${BASE_REF}")
+          echo "current base digest: ${current_digest}"
+
           cutoff=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
 
           # Unlike releases/latest, the releases list endpoint includes
           # prereleases (rc, beta). We want those built too — build.yml
           # gates the floating 'latest' tag on a stable version regex,
           # so prereleases publish under their own tag only. Weekly
-          # snapshot tags (with '+' suffix) are not published as Releases
-          # and remain excluded here.
-          mapfile -t releases < <(
-            gh api 'repos/moodle/moodle/releases?per_page=20' \
-              --jq ".[] | select(.published_at >= \"${cutoff}\") | .tag_name"
-          )
+          # snapshot tags (with '+' suffix) are not published as
+          # Releases and remain excluded here.
+          all_releases_json=$(gh api 'repos/moodle/moodle/releases?per_page=20')
 
-          if [ "${#releases[@]}" -eq 0 ]; then
-            echo "no releases published since ${cutoff}"
-            exit 0
-          fi
+          mapfile -t recent < <(
+            echo "${all_releases_json}" \
+              | jq -r ".[] | select(.published_at >= \"${cutoff}\") | .tag_name"
+          )
 
           token=$(curl -fsS "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE_NAME}:pull" | jq -r .token)
 
           pending=()
-          for upstream in "${releases[@]}"; do
-            # Series guard. Strip leading 'v', drop any prerelease suffix,
-            # then take everything before the last dot to get MAJOR.MINOR.
+          declare -A reasons=()
+
+          # --- 1. New-version detection ---
+          for upstream in "${recent[@]}"; do
+            [ -n "${upstream}" ] || continue
+            # Series guard. Strip leading 'v', drop any prerelease
+            # suffix, then take everything before the last dot to get
+            # MAJOR.MINOR.
             base="${upstream#v}"
             base="${base%%-*}"
             series="${base%.*}"
@@ -81,13 +98,60 @@ jobs:
             else
               echo "${upstream} not in registry (HTTP ${status}); will trigger build"
               pending+=("${upstream}")
+              reasons["${upstream}"]="new-version"
             fi
+          done
+
+          # --- 2. Base-image drift detection (latest stable in-series only) ---
+          series_re="^v${SERIES//./\\.}\.[0-9]+\$"
+          latest_stable=$(
+            echo "${all_releases_json}" \
+              | jq -r '.[] | .tag_name' \
+              | grep -E "${series_re}" \
+              | sort -V \
+              | tail -n 1 || true
+          )
+
+          drift_skip=""
+          if [ -z "${latest_stable}" ]; then
+            drift_skip="no stable release found in series ${SERIES}"
+          elif [ "${#pending[@]}" -gt 0 ] && printf '%s\n' "${pending[@]}" | grep -qFx "${latest_stable}"; then
+            drift_skip="${latest_stable} already pending as new-version"
+          fi
+
+          if [ -n "${drift_skip}" ]; then
+            echo "drift check skipped: ${drift_skip}"
+          else
+            cfg=$(crane config "${REGISTRY}/${IMAGE_NAME}:${latest_stable}" 2>/dev/null || true)
+            if [ -z "${cfg}" ]; then
+              echo "${latest_stable} not yet in registry; drift check N/A"
+            else
+              published_digest=$(echo "${cfg}" | jq -r '.config.Labels["org.opencontainers.image.base.digest"] // empty')
+              if [ "${published_digest}" = "${current_digest}" ]; then
+                echo "${latest_stable} base digest matches (${current_digest}); no drift"
+              else
+                echo "${latest_stable} base drift: published=${published_digest:-<none>} current=${current_digest}; will trigger rebuild"
+                pending+=("${latest_stable}")
+                reasons["${latest_stable}"]="base-drift"
+              fi
+            fi
+          fi
+
+          if [ "${#pending[@]}" -eq 0 ]; then
+            echo "nothing to build"
+            exit 0
+          fi
+
+          echo "triggering builds:"
+          for tag in "${pending[@]}"; do
+            echo "  - ${tag} (${reasons[$tag]})"
           done
 
           {
             echo "pending<<EOF"
             printf '%s\n' "${pending[@]}"
             echo "EOF"
+            echo "base_digest=${current_digest}"
           } >>"$GITHUB_OUTPUT"
 
       - name: Trigger builds
@@ -95,10 +159,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PENDING: ${{ steps.check.outputs.pending }}
+          BASE_DIGEST: ${{ steps.check.outputs.base_digest }}
         run: |
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             gh workflow run build.yml \
+              --repo "${GITHUB_REPOSITORY}" \
               -f moodle_version="$tag" \
-              -f php_version="${PHP_VERSION}"
+              -f php_version="${PHP_VERSION}" \
+              -f base_digest="${BASE_DIGEST}"
           done <<<"$PENDING"

@@ -7,8 +7,15 @@ This image powers Moodle on [PikaPods](https://www.pikapods.com) and is
 maintained by the PikaPods team. It's published here for our users' reference
 and the benefit of the wider community.
 
-Published to both `ghcr.io/pikapods/docker-moodle:<moodle-version>` and
-`pikapods/docker-moodle:<moodle-version>` (Docker Hub).
+Published to both `ghcr.io/pikapods/docker-moodle` and
+`pikapods/docker-moodle` (Docker Hub). Three tag patterns are pushed
+per build:
+
+| Tag             | Mutability  | Use for                                                  |
+|-----------------|-------------|----------------------------------------------------------|
+| `latest`        | mutable     | Most recent build of the most recent in-series stable    |
+| `v5.2.0`        | mutable     | Pin to a Moodle version; auto-receive base-image patches |
+| `v5.2.0-r1`     | immutable   | Byte-for-byte reproducibility; never reused              |
 
 Source: https://github.com/pikapods/docker-moodle
 
@@ -278,25 +285,6 @@ docker build \
 
 On podman, add `--format docker` — see the podman notes in Quick start for
 why.
-
-### Pinning inputs
-
-The published image uses floating tags (`serversideup/php:8.3-…` base,
-Moodle git tag) so the daily CI rebuild picks up upstream security fixes.
-
-For a more reproducible build:
-
-- **Moodle version.** `MOODLE_VERSION` is passed to `git clone --branch`, so
-  it must be a tag or branch name — `v5.2.0`, `MOODLE_502_STABLE`, etc.
-  Arbitrary commit SHAs are **not supported** by `--branch`; if you need
-  commit-level pinning, fork the Dockerfile and replace the clone step with
-  a `git fetch && git checkout <sha>`.
-- **Base image.** Override `serversideup/php` in your own derived
-  Dockerfile with a digest pin:
-  `FROM serversideup/php:8.3-fpm-nginx-alpine@sha256:…`.
-- **Compose.** The bundled `compose.yaml` defaults to `:latest` for the
-  quick-start path; in production, pin to a specific Moodle version tag
-  (e.g. `ghcr.io/pikapods/docker-moodle:v5.2.0`).
 
 ## License
 
