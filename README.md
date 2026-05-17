@@ -212,12 +212,8 @@ build-time `WWW_DATA_UID`/`WWW_DATA_GID` rebuild above.
 |------|--------------------------------------------------------------------------|
 | 8080 | HTTP (serversideup's unprivileged default).                              |
 
-Behind a reverse proxy this is invisible to end users.
-
-## Behind a TLS-terminating reverse proxy
-
-- `MOODLE_CFG_SSLPROXY=true` — treat the request as HTTPS even though the upstream hop is plain HTTP.
-- `MOODLE_CFG_REVERSEPROXY=true` — trust `X-Forwarded-For` for client-IP logging.
+Behind a reverse proxy this is invisible to end users. For a TLS-terminating
+proxy, set `MOODLE_CFG_SSLPROXY=true` so Moodle treats the request as HTTPS.
 
 ## `config.php` ownership model
 
