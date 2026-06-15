@@ -1,0 +1,24 @@
+#!/command/with-contenv sh
+# Moodle plugin sync — poll for web-UI-installed plugins and persist them to
+# /data/plugins (capture), and trash stored plugins the admin uninstalled
+# (prune). Restore happens once in the bootstrap oneshot before services
+# start, so it is intentionally not repeated here.
+
+# Default-on; explicit-disable accepts the usual falsey spellings.
+case "${ENABLE_PLUGIN_SYNC:-TRUE}" in
+    [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Nn]|[Oo][Ff][Ff])
+        exec sleep infinity
+        ;;
+esac
+
+. /usr/local/lib/moodle/plugin-sync.sh
+
+# Skip until install has finished — capture/prune key off the codebase, but
+# there is no point churning before Moodle is actually serving.
+while [ ! -s /data/config/config.php ]; do sleep 5; done
+
+while :; do
+    capture_plugins || true
+    prune_plugins || true
+    sleep "${PLUGIN_SYNC_INTERVAL:-60}"
+done

@@ -73,6 +73,18 @@ RUN git clone --depth=1 --branch="${MOODLE_VERSION}" \
         "${MOODLE_REPO}" /var/www/html \
     && rm -rf /var/www/html/.git /var/www/html/.github
 
+# Baseline of plugins present in the pristine image, so the runtime sync can
+# tell user-installed plugins apart from core. Marker = version.php (every
+# Moodle plugin has one, at any nesting depth). Paths are relative to public/.
+# Stored OUTSIDE public/ (not scanned by Moodle) so it travels with the image
+# tag: a newer image with more core plugins ships an updated baseline; a
+# volume-stored baseline would wrongly classify last version's core as user
+# plugins. The chown -R below covers ownership of this file.
+RUN cd /var/www/html/public \
+    && find . -name version.php -type f \
+        | sed -e 's#^\./##' -e 's#/version\.php$##' \
+        | sort > /var/www/html/.moodle-core-plugins.manifest
+
 # Top-level config.php is the canonical location Moodle's public/config.php
 # loader requires. Symlink it into /data so install.php's fopen('w') writes
 # through to the volume and subsequent boots reuse the same file.
@@ -115,6 +127,8 @@ COPY rootfs/ /
 RUN chmod +x /etc/entrypoint.d/20-moodle-bootstrap.sh \
              /etc/s6-overlay/s6-rc.d/moodle-cron/run \
              /etc/s6-overlay/s6-rc.d/moodle-adhoc/run \
+             /etc/s6-overlay/s6-rc.d/moodle-pluginsync/run \
+             /usr/local/lib/moodle/plugin-sync.sh \
     && chown -R www-data:www-data /etc/nginx \
     && docker-php-serversideup-s6-init
 
@@ -127,10 +141,14 @@ RUN chmod +x /etc/entrypoint.d/20-moodle-bootstrap.sh \
 # unusably slow without it. Override to 0 only for debugging.
 # PHP_MAX_INPUT_VARS=5000: Moodle 5.2's environment check requires >=5000
 # (large forms — gradebook, quiz editor — blow past the PHP default of 1000).
+# ENABLE_PLUGIN_SYNC=TRUE: persist web-UI-installed plugins across container
+# recreation. Captured under /data/plugins, symlinked back into the codebase
+# on boot. PLUGIN_SYNC_INTERVAL is the capture/prune poll period in seconds.
 ENV AUTORUN_ENABLED=false \
     SSL_MODE=off \
     ENABLE_MOODLE_CRON=TRUE \
     ENABLE_MOODLE_ADHOC=TRUE \
+    ENABLE_PLUGIN_SYNC=TRUE \
     PHP_OPCACHE_ENABLE=1 \
     PHP_MAX_INPUT_VARS=5000 \
     APP_BASE_DIR=/var/www/html

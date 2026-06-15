@@ -130,6 +130,15 @@ The cron service invokes `admin/cli/cron.php --keep-alive=0` once per minute.
 This leaves scheduling cadence to the container wrapper and avoids Moodle's
 default 3-minute cron keep-alive being terminated by the wrapper timeout.
 
+### Plugin persistence
+
+| Var                    | Default | Purpose                                                |
+|------------------------|---------|--------------------------------------------------------|
+| `ENABLE_PLUGIN_SYNC`   | `TRUE`  | Disable with any of `FALSE`/`false`/`0`/`no`/`off`. Stops capture/restore of web-UI-installed plugins. |
+| `PLUGIN_SYNC_INTERVAL` | `60`    | Seconds between capture/prune polls of the background sync service. |
+
+See the [Plugins](#plugins) section for how this works.
+
 ### Moodle `config.php` passthrough
 
 Any env var named `MOODLE_CFG_<KEY>` is patched into a managed block inside
@@ -172,11 +181,52 @@ or empty deletes the key on the next boot. To set a PHP null literal, use
 Invalid keys (dashes, regex metachars, names starting with a digit) are
 logged and skipped.
 
+## Plugins
+
+Plugins installed through the Moodle admin UI **persist across container
+recreation** (image upgrade / redeploy) automatically. No extra mounts.
+
+**How it works.** The Moodle codebase is baked into the image at
+`/var/www/html` (its `dirroot` is `.../public`); only `/data` is persisted. A
+plugin installed via the web UI is extracted as a real directory under
+`public/<type>/<name>` on the image's ephemeral layer — it works in-session but
+would vanish on recreation, leaving the DB version row behind ("Not found on
+disk!"). To prevent that:
+
+- A background service **captures** each newly installed plugin into
+  `/data/plugins/<relpath>` (mirroring its path under `public/`) and replaces
+  the original with a symlink. Polls every `PLUGIN_SYNC_INTERVAL` seconds.
+- On **every boot**, before php-fpm starts, captured plugins are **restored**
+  as symlinks into the codebase — so they exist before Moodle loads.
+- **Core is never touched.** A baseline manifest of the plugins shipped in the
+  pristine image (`/var/www/html/.moodle-core-plugins.manifest`, baked at build
+  time) tells user-installed plugins apart from core. Captured plugins are
+  identified nesting-agnostically by their `version.php` marker, so subplugins
+  at any depth are handled correctly.
+
+**Manual / CLI install.** Drop a plugin tree at
+`/data/plugins/<relpath-under-public>` (e.g. `/data/plugins/mod/myplugin`) and
+restart — restore symlinks it into the codebase. Convenient for automated
+provisioning. Then run Moodle's upgrade (visit the admin notifications page or
+`php admin/cli/upgrade.php`) so the DB picks it up.
+
+**Uninstall.** Uninstalling a plugin from the admin UI removes its symlink;
+the next prune pass moves the stored copy to `/data/plugins/.trash/` (kept for
+recovery, never hard-deleted).
+
+**Capture-timing caveat.** A plugin is captured within `PLUGIN_SYNC_INTERVAL`
+(default 60s) of install. Recreating the container in that window — after
+installing but before capture — loses the not-yet-captured plugin. Recreations
+are operator-initiated, so wait ~1 minute after installing a plugin before
+redeploying (or lower the interval).
+
+Disable the whole mechanism with `ENABLE_PLUGIN_SYNC=FALSE`.
+
 ## Mounts
 
 | Path              | Purpose                                                            |
 |-------------------|--------------------------------------------------------------------|
-| `/data`           | Persistent volume. Contains `config/config.php` and `moodledata/`. |
+| `/data`           | Persistent volume. Contains `config/config.php`, `moodledata/`, and `plugins/` (web-UI-installed plugins). |
 | `/var/www/html`   | Moodle source. Baked at build time — do **not** bind-mount.        |
 
 `/var/www/html/config.php` is a symlink into `/data/config/config.php` so the
@@ -265,7 +315,7 @@ across majors are the wrong default for production data.
 |----------------------------------------------------------------|------------------------------------------------------------|
 | Default port `8080` (was `8080` HTTP / `8443` HTTPS)           | Same.                                                      |
 | App lives at `/var/www/html` (was `/bitnami/moodle`)           | Source baked into image. `/bitnami/moodle` shadows new code on upgrade. |
-| Only `config.php` + `moodledata` persisted, not the codebase   | Image tag upgrades are reliable; no in-volume drift.       |
+| Only `config.php` + `moodledata` + `plugins/` persisted, not the codebase | Image tag upgrades are reliable; no in-volume drift. Web-UI plugins are captured to `/data/plugins` and symlinked back (see [Plugins](#plugins)). |
 | Env vars renamed (`MOODLE_*` → simpler `MOODLE_URL` / `DB_*`)  | Not drop-in compatible. Document migration if you need it. |
 | `ENABLE_MOODLE_CRON` defaults `TRUE`                           | Moodle is broken without it.                               |
 | No auto-`upgrade.php` across majors                            | Silent schema upgrades are wrong for production data.      |

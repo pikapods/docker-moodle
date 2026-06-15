@@ -67,6 +67,7 @@ class TestImageMetadata:
         assert env.get("SSL_MODE") == "off"
         assert env.get("ENABLE_MOODLE_CRON") == "TRUE"
         assert env.get("ENABLE_MOODLE_ADHOC") == "TRUE"
+        assert env.get("ENABLE_PLUGIN_SYNC") == "TRUE"
         assert env.get("PHP_OPCACHE_ENABLE") == "1"
         assert env.get("PHP_MAX_INPUT_VARS") == "5000"
         assert env.get("APP_BASE_DIR") == "/var/www/html"
@@ -137,13 +138,48 @@ class TestImageFilesystem:
         )
         assert r.returncode == 0, "moodle-adhoc dependency marker on bootstrap missing"
 
-    @pytest.mark.parametrize("service", ["moodle-cron", "moodle-adhoc"])
+    @pytest.mark.parametrize("service", ["moodle-cron", "moodle-adhoc", "moodle-pluginsync"])
     def test_s6_user_contents(self, service):
         r = _run("test", "-e", f"/etc/s6-overlay/s6-rc.d/user/contents.d/{service}")
         assert r.returncode == 0, (
             f"{service} not registered under user/contents.d "
             f"(stdout={r.stdout!r}, stderr={r.stderr!r})"
         )
+
+    def test_plugin_sync_lib_executable(self):
+        r = _run("test", "-x", "/usr/local/lib/moodle/plugin-sync.sh")
+        assert r.returncode == 0, "plugin-sync.sh missing or not executable"
+
+    def test_s6_pluginsync_run_executable(self):
+        r = _run("test", "-x", "/etc/s6-overlay/s6-rc.d/moodle-pluginsync/run")
+        assert r.returncode == 0, "moodle-pluginsync run script missing or not executable"
+
+    def test_s6_pluginsync_is_longrun(self):
+        r = _run("cat", "/etc/s6-overlay/s6-rc.d/moodle-pluginsync/type")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == "longrun"
+
+    def test_s6_pluginsync_depends_on_bootstrap(self):
+        r = _run(
+            "test", "-f",
+            "/etc/s6-overlay/s6-rc.d/moodle-pluginsync/dependencies.d/20-moodle-bootstrap",
+        )
+        assert r.returncode == 0, "moodle-pluginsync dependency marker on bootstrap missing"
+
+    def test_core_plugin_manifest_present(self):
+        r = _run("test", "-s", "/var/www/html/.moodle-core-plugins.manifest")
+        assert r.returncode == 0, "core-plugins manifest missing or empty"
+
+    @pytest.mark.parametrize("entry", [
+        "mod/quiz",
+        "question/type/multichoice",
+        # A nested subplugin — proves the version.php walk captures nesting
+        # the components.json walk would miss.
+        "mod/assign/submission/file",
+    ])
+    def test_core_plugin_manifest_contains(self, entry):
+        r = _run("grep", "-Fxq", entry, "/var/www/html/.moodle-core-plugins.manifest")
+        assert r.returncode == 0, f"{entry!r} not in core-plugins manifest"
 
     def test_s6_bootstrap_oneshot_installed(self):
         # The base image's docker-php-serversideup-s6-init moves our

@@ -68,11 +68,13 @@ def _wait_http_200(url, deadline_s):
     raise RuntimeError(f"{url} did not return 200 within {deadline_s}s (last={last_err})")
 
 
-def _wait_managed_block(container, deadline_s=60):
+def _wait_managed_block(container, deadline_s=180):
     # install.php writes a valid config.php and exits; nginx+php-fpm are not
     # gated on the bootstrap oneshot, so `/login/index.php` can return 200
-    # while the managed-block patch is still in flight. Block here until the
-    # marker is present so downstream tests see a fully-patched file.
+    # (a redirect to install.php) while first-boot install is still creating
+    # the schema and the managed-block patch has not run yet. The deadline
+    # matches the Dockerfile HEALTHCHECK start-period=180s — the project's own
+    # stated headroom for a cold install — so a slow runner doesn't flake.
     end = time.time() + deadline_s
     while time.time() < end:
         r = _exec(
@@ -92,6 +94,38 @@ def _host_port(container, container_port):
     # Output like "0.0.0.0:32768\n[::]:32768\n" — take first line.
     line = r.stdout.splitlines()[0]
     return int(line.rsplit(":", 1)[1])
+
+
+def _app_run_args(name, net, mdb, *, volume=None, prefix=None, extra_env=None):
+    """Build the `docker run` argv for a Moodle app container against `mdb`.
+
+    `-P` publishes EXPOSE'd ports on auto-assigned host ports. Real docker also
+    accepts `-p 0:8080`, but podman rejects that form ("port numbers must be
+    between 1 and 65535"), and `-P` works on both. _host_port() resolves the
+    actual host port.
+    """
+    args = ["docker", "run", "-d", "--name", name, "--network", net]
+    if volume:
+        args += ["-v", f"{volume}:/data"]
+    env = {
+        "MOODLE_URL": "http://localhost:8080",
+        "DB_TYPE": "mariadb",
+        "DB_HOST": mdb,
+        "DB_NAME": "moodle",
+        "DB_USER": "moodle",
+        "DB_PASS": "changeme",
+        "ADMIN_USER": "admin",
+        "ADMIN_PASS": "changeme",
+        "ADMIN_EMAIL": "admin@smoke.local",
+    }
+    if prefix:
+        env["DB_PREFIX"] = prefix
+    if extra_env:
+        env.update(extra_env)
+    for k, v in env.items():
+        args += ["-e", f"{k}={v}"]
+    args += ["-P", IMAGE]
+    return args
 
 
 @pytest.fixture(scope="session")
@@ -117,28 +151,15 @@ def stack():
         )
         _wait_mariadb_ready(mdb)
 
-        _sh(
-            "docker", "run", "-d", "--name", moodle, "--network", net,
-            "-e", "MOODLE_URL=http://localhost:8080",
-            "-e", "DB_TYPE=mariadb",
-            "-e", f"DB_HOST={mdb}",
-            "-e", "DB_NAME=moodle",
-            "-e", "DB_USER=moodle",
-            "-e", "DB_PASS=changeme",
-            "-e", "ADMIN_USER=admin",
-            "-e", "ADMIN_PASS=changeme",
-            "-e", "ADMIN_EMAIL=admin@smoke.local",
+        _sh(*_app_run_args(
+            moodle, net, mdb,
             # MOODLE_CFG_* passthrough — covered by managed-block tests below.
-            "-e", "MOODLE_CFG_DEBUG=32767",
-            "-e", "MOODLE_CFG_DEBUGDISPLAY=true",
-            "-e", "MOODLE_CFG_NOEMAILEVER=true",
-            # `-P` publishes EXPOSE'd ports on auto-assigned host ports.
-            # Real docker also accepts `-p 0:8080`, but podman rejects that
-            # form ("port numbers must be between 1 and 65535"), and -P
-            # works on both. _host_port() resolves the actual host port.
-            "-P",
-            IMAGE,
-        )
+            extra_env={
+                "MOODLE_CFG_DEBUG": "32767",
+                "MOODLE_CFG_DEBUGDISPLAY": "true",
+                "MOODLE_CFG_NOEMAILEVER": "true",
+            },
+        ))
         port = _host_port(moodle, "8080")
         try:
             _wait_http_200(f"http://127.0.0.1:{port}/login/index.php", READY_DEADLINE_S)
@@ -289,3 +310,99 @@ def test_healthcheck_reports_healthy(stack):
             pytest.fail(f"container went unhealthy: {health.get('Log', [])[-1:]!r}")
         time.sleep(3)
     pytest.fail(f"healthcheck still {last!r} after {HEALTHY_DEADLINE_S}s")
+
+
+# Path of the synthetic plugin, relative to public/. Mirrors the on-disk shape
+# the web installer produces (a real dir containing version.php under a plugin
+# type path) — capture keys on exactly this.
+_FAKE_PLUGIN_REL = "ai/provider/fake"
+_FAKE_PLUGIN_DIR = f"/var/www/html/public/{_FAKE_PLUGIN_REL}"
+_FAKE_PLUGIN_STORE = f"/data/plugins/{_FAKE_PLUGIN_REL}"
+
+
+def test_plugin_persists_across_recreate(stack):
+    """End-to-end proof of the fix for issue #2: a web-UI-installed plugin
+    survives container recreation. Uses its own /data volume + DB prefix so it
+    is isolated from the session stack, but reuses the session's mariadb/net.
+    """
+    suffix = secrets.token_hex(4)
+    app = f"moodle-plug-{suffix}"
+    vol = f"moodle-plugvol-{suffix}"
+    net, mdb = stack["net"], stack["mdb"]
+
+    run_args = _app_run_args(
+        app, net, mdb, volume=vol, prefix="plug_",
+        # Tight poll so the background prune/capture loop is responsive; the
+        # test triggers capture directly rather than waiting on it.
+        extra_env={"PLUGIN_SYNC_INTERVAL": "5"},
+    )
+
+    _sh("docker", "volume", "create", vol)
+    try:
+        _sh(*run_args)
+        port = _host_port(app, "8080")
+        try:
+            _wait_http_200(f"http://127.0.0.1:{port}/login/index.php", READY_DEADLINE_S)
+        except RuntimeError:
+            dump = _sh("docker", "logs", app, check=False)
+            print(dump.stdout)
+            print(dump.stderr)
+            raise
+
+        # Simulate a UI install: a real plugin dir with version.php, identical
+        # on-disk shape to the web installer's extraction.
+        r = _exec(
+            app, "sh", "-c",
+            f"mkdir -p {_FAKE_PLUGIN_DIR} && "
+            f"printf '<?php\\n$plugin->version=2025010100;\\n"
+            f"$plugin->component=\"aiprovider_fake\";\\n' "
+            f"> {_FAKE_PLUGIN_DIR}/version.php",
+            check=False,
+        )
+        assert r.returncode == 0, f"failed to plant fake plugin: {r.stderr}"
+
+        # Trigger capture directly rather than waiting a poll interval.
+        r = _exec(
+            app, "sh", "-c",
+            ". /usr/local/lib/moodle/plugin-sync.sh; capture_plugins",
+        )
+        assert r.returncode == 0, f"capture_plugins failed: {r.stderr}"
+
+        # Captured to /data and the original replaced by a symlink.
+        assert _exec(app, "test", "-f", f"{_FAKE_PLUGIN_STORE}/version.php").returncode == 0, \
+            "plugin not captured into /data/plugins"
+        assert _exec(app, "test", "-L", _FAKE_PLUGIN_DIR).returncode == 0, \
+            "captured plugin not replaced by a symlink in the codebase"
+
+        # A baked core plugin must NOT have been captured.
+        assert _exec(app, "test", "!", "-e", "/data/plugins/mod/quiz").returncode == 0, \
+            "core plugin mod/quiz was wrongly captured"
+
+        # --- Recreate (NOT restart): destroy the container, start a fresh one
+        # on the SAME /data volume and env. This is what a redeploy / image
+        # upgrade does — the ephemeral codebase layer resets.
+        _sh("docker", "rm", "-f", app)
+        _sh(*run_args)
+        port = _host_port(app, "8080")
+        try:
+            _wait_http_200(f"http://127.0.0.1:{port}/login/index.php", READY_DEADLINE_S)
+        except RuntimeError:
+            dump = _sh("docker", "logs", app, check=False)
+            print(dump.stdout)
+            print(dump.stderr)
+            raise
+
+        # Restore ran in bootstrap before php-fpm: the plugin is a symlink into
+        # /data/plugins again, and the file resolves through it.
+        r = _exec(app, "readlink", _FAKE_PLUGIN_DIR)
+        assert r.returncode == 0 and r.stdout.strip() == _FAKE_PLUGIN_STORE, (
+            f"after recreate, {_FAKE_PLUGIN_DIR} -> {r.stdout.strip()!r}, "
+            f"expected {_FAKE_PLUGIN_STORE}"
+        )
+        assert _exec(app, "test", "-f", f"{_FAKE_PLUGIN_DIR}/version.php").returncode == 0, \
+            "restored plugin symlink does not resolve to its version.php"
+        assert _exec(app, "test", "!", "-e", "/data/plugins/mod/quiz").returncode == 0, \
+            "core plugin mod/quiz was wrongly captured after recreate"
+    finally:
+        subprocess.run(["docker", "rm", "-f", app], capture_output=True)
+        subprocess.run(["docker", "volume", "rm", vol], capture_output=True)

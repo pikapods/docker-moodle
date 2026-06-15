@@ -279,4 +279,17 @@ awk -v block_file="$BLOCK_TMP" '
 mv "$PATCHED_TMP" "$CONFIG_FILE"
 rm -f "$BLOCK_TMP"
 
+# ---------------------------------------------------------------------------
+# 6. Plugin persistence — restore captured plugins as symlinks into the
+#    codebase BEFORE s6 starts nginx/php-fpm (this oneshot gates the
+#    services), so the files exist before Moodle boots. This is the line that
+#    eliminates "Not found on disk!" after a recreate. The one-shot capture
+#    covers a graceful restart where a just-installed plugin is still a real
+#    dir. Both are guarded so a sync hiccup never crash-loops the site
+#    (this script is `set -eu`).
+# ---------------------------------------------------------------------------
+. /usr/local/lib/moodle/plugin-sync.sh
+restore_plugins || log "WARN: plugin restore failed (continuing)"
+capture_plugins || log "WARN: plugin capture failed (continuing)"
+
 log "bootstrap complete"
