@@ -138,13 +138,22 @@ class TestImageFilesystem:
         )
         assert r.returncode == 0, "moodle-adhoc dependency marker on bootstrap missing"
 
-    @pytest.mark.parametrize("service", ["moodle-cron", "moodle-adhoc", "moodle-pluginsync"])
+    # Base services included: guards against our COPY clobbering the base bundle.
+    @pytest.mark.parametrize(
+        "service", ["moodle-cron", "moodle-adhoc", "moodle-pluginsync", "nginx", "php-fpm"]
+    )
     def test_s6_user_contents(self, service):
-        r = _run("test", "-e", f"/etc/s6-overlay/s6-rc.d/user/contents.d/{service}")
+        r = _run("test", "-e", f"/etc/s6-overlay/user-bundles.d/user/contents.d/{service}")
         assert r.returncode == 0, (
-            f"{service} not registered under user/contents.d "
+            f"{service} not registered under user-bundles.d/user/contents.d "
             f"(stdout={r.stdout!r}, stderr={r.stderr!r})"
         )
+
+    def test_no_legacy_s6_user_bundle(self):
+        # s6-overlay >=3.2.3.2: a bundle under s6-rc.d/user triggers a compat
+        # shim that writes s6-rc.d/user/type at boot, which fails as www-data.
+        r = _run("test", "-e", "/etc/s6-overlay/s6-rc.d/user")
+        assert r.returncode != 0, "legacy /etc/s6-overlay/s6-rc.d/user bundle present"
 
     def test_plugin_sync_lib_executable(self):
         r = _run("test", "-x", "/usr/local/lib/moodle/plugin-sync.sh")
