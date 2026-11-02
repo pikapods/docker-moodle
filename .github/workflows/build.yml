@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       moodle_version:
-        description: "Moodle version tag (e.g. v5.2.0)"
+        description: "Moodle version tag (e.g. v5.3.0)"
         required: true
         type: string
       php_version:
@@ -62,7 +62,7 @@ jobs:
             MOODLE_VER="${{ inputs.moodle_version }}"
             PHP_VER="${{ inputs.php_version }}"
           else
-            # Tag form: v<moodle-version> (e.g. v5.2.0). The `v` prefix is
+            # Tag form: v<moodle-version> (e.g. v5.3.0). The `v` prefix is
             # part of the upstream tag, so use GITHUB_REF_NAME verbatim.
             MOODLE_VER="${GITHUB_REF_NAME}"
             PHP_VER="8.3"
@@ -105,7 +105,7 @@ jobs:
             exit 0
           fi
           # Read the published mutable tag's image.version label
-          # (form: <moodle-version>-<revision>, e.g. v5.2.0-r1). Increment
+          # (form: <moodle-version>-<revision>, e.g. v5.3.0-r1). Increment
           # the trailing rN. Missing tag, missing label, or non-rN suffix
           # all fall back to r1 — covers first builds and legacy images
           # published before the -rN scheme rolled out.
@@ -316,10 +316,10 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Push refs to each registry:
-      #   <version>-<revision>   immutable (e.g. v5.2.0-r2). This exact build,
+      #   <version>-<revision>   immutable (e.g. v5.3.0-r2). This exact build,
       #                          never reused. Pin here for byte-for-byte
       #                          reproducibility.
-      #   <version>              mutable Moodle-version alias (e.g. v5.2.0).
+      #   <version>              mutable Moodle-version alias (e.g. v5.3.0).
       #                          Floats to the latest revision so base-image
       #                          security rebuilds land in place — users pinned
       #                          here receive patches without re-pinning.

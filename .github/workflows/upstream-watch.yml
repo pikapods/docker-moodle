@@ -10,8 +10,8 @@ env:
   IMAGE_NAME: ${{ github.repository }}
   PHP_VERSION: "8.3"
   # Pinned upstream series (major.minor). Auto-rebuilds fire for any new
-  # release in this line — stable patch bumps (v5.2.0 -> v5.2.1) and
-  # prereleases alike (v5.2.0-rc1, v5.2.0-beta). Only stable releases
+  # release in this line — stable patch bumps (v5.3.0 -> v5.3.1) and
+  # prereleases alike (v5.3.0-rc1, v5.3.0-beta). Only stable releases
   # promote the floating 'latest' tag; that gate lives in build.yml.
   #
   # Two independent triggers:
@@ -28,9 +28,9 @@ env:
   #    latest stable in-series tag only — older patch releases and
   #    prereleases are not rebuilt on drift. The rebuild bumps the
   #    immutable -rN suffix and refreshes the mutable <version> tag in
-  #    place, so users pinned to v5.2.0 receive Alpine/PHP/nginx
+  #    place, so users pinned to v5.3.0 receive Alpine/PHP/nginx
   #    security patches without re-pinning.
-  SERIES: "5.2"
+  SERIES: "5.3"
 
 jobs:
   check:

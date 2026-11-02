@@ -2,7 +2,7 @@ name: moodle
 
 services:
   mariadb:
-    image: mariadb:11           # 10.11+ is Moodle 5.2 minimum; 11 is current LTS
+    image: mariadb:11           # 11.4+ is Moodle 5.3 minimum; 11 is current LTS
     environment:
       MARIADB_DATABASE: moodle
       MARIADB_USER: moodle

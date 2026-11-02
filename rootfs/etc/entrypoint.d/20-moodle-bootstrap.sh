@@ -84,7 +84,7 @@ ADMIN_USER=${ADMIN_USER:-admin}
 # 2. Ensure /data tree exists.
 # ---------------------------------------------------------------------------
 mkdir -p "$CONFIG_DIR" "$DATAROOT"
-# Moodle 5.2 writes require_once(__DIR__ . '/lib/setup.php') into config.php.
+# Moodle 5.3 writes require_once(__DIR__ . '/lib/setup.php') into config.php.
 # Because our canonical config.php lives in /data/config and is symlinked from
 # the app root, provide the expected relative lib path inside the volume.
 ln -sfn "$APP_DIR/lib" "$CONFIG_DIR/lib"

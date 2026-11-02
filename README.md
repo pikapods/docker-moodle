@@ -14,8 +14,8 @@ per build:
 | Tag             | Mutability  | Use for                                                  |
 |-----------------|-------------|----------------------------------------------------------|
 | `latest`        | mutable     | Most recent build of the most recent in-series stable    |
-| `v5.2.0`        | mutable     | Pin to a Moodle version; auto-receive base-image patches |
-| `v5.2.0-r1`     | immutable   | Byte-for-byte reproducibility; never reused              |
+| `v5.3.0`        | mutable     | Pin to a Moodle version; auto-receive base-image patches |
+| `v5.3.0-r1`     | immutable   | Byte-for-byte reproducibility; never reused              |
 
 Source: https://github.com/pikapods/docker-moodle
 
@@ -309,6 +309,11 @@ docker compose exec moodle php /var/www/html/admin/cli/upgrade.php \
 This image does not run `upgrade.php` automatically — silent schema upgrades
 across majors are the wrong default for production data.
 
+**5.2 → 5.3:** Moodle 5.3 raises database minimums to MariaDB ≥ 11.4,
+MySQL ≥ 8.4, or PostgreSQL ≥ 17. Upgrade the database before switching the
+image tag. `v5.2.x` tags remain published but no longer receive base-image
+rebuilds.
+
 ## Deliberate breaks vs. `bitnami/moodle`
 
 | Break                                                          | Rationale                                                  |
@@ -324,7 +329,7 @@ across majors are the wrong default for production data.
 
 ```bash
 docker build \
-  --build-arg MOODLE_VERSION=v5.2.0 \
+  --build-arg MOODLE_VERSION=v5.3.0 \
   --build-arg PHP_VERSION=8.3 \
   -t moodle:test .
 ```

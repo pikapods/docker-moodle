@@ -3,9 +3,9 @@
 #
 # Build:
 #   podman build \
-#     --build-arg MOODLE_VERSION=v5.2.0 \
+#     --build-arg MOODLE_VERSION=v5.3.0 \
 #     --build-arg PHP_VERSION=8.3 \
-#     -t ghcr.io/pikapods/docker-moodle:v5.2.0 .
+#     -t ghcr.io/pikapods/docker-moodle:v5.3.0 .
 
 ARG PHP_VERSION=8.3
 # BASE_IMAGE is composed by build.yml as serversideup/php:<minor>-fpm-nginx-alpine
@@ -14,7 +14,7 @@ ARG PHP_VERSION=8.3
 ARG BASE_IMAGE=serversideup/php:${PHP_VERSION}-fpm-nginx-alpine
 FROM ${BASE_IMAGE}
 
-ARG MOODLE_VERSION=v5.2.0
+ARG MOODLE_VERSION=v5.3.0
 ARG MOODLE_REPO=https://github.com/moodle/moodle
 
 # Build identity. IMAGE_REVISION is bumped by build.yml when the same
@@ -56,7 +56,7 @@ RUN apk add --no-cache \
     #     pdo_mysql (already present) is not sufficient.
     #   - pgsql: Moodle's native postgres driver uses procedural pg_*;
     #     pdo_pgsql (already present) is not sufficient.
-    #   - gd, intl, soap, exif, bcmath: required by Moodle 5.2
+    #   - gd, intl, soap, exif, bcmath: required by Moodle 5.3
     #     environment.xml.
     && install-php-extensions \
         mysqli \
@@ -139,7 +139,7 @@ RUN chmod +x /etc/entrypoint.d/20-moodle-bootstrap.sh \
 # cron (queues, notifications, gradebook regrade, scheduled tasks).
 # PHP_OPCACHE_ENABLE=1: serversideup/php ships opcache disabled; Moodle is
 # unusably slow without it. Override to 0 only for debugging.
-# PHP_MAX_INPUT_VARS=5000: Moodle 5.2's environment check requires >=5000
+# PHP_MAX_INPUT_VARS=5000: Moodle 5.3's environment check requires >=5000
 # (large forms — gradebook, quiz editor — blow past the PHP default of 1000).
 # ENABLE_PLUGIN_SYNC=TRUE: persist web-UI-installed plugins across container
 # recreation. Captured under /data/plugins, symlinked back into the codebase
