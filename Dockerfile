@@ -129,6 +129,7 @@ RUN chmod +x /etc/entrypoint.d/20-moodle-bootstrap.sh \
              /etc/s6-overlay/s6-rc.d/moodle-adhoc/run \
              /etc/s6-overlay/s6-rc.d/moodle-pluginsync/run \
              /usr/local/lib/moodle/plugin-sync.sh \
+             /usr/local/bin/moodle-healthcheck \
     && chown -R www-data:www-data /etc/nginx \
     && docker-php-serversideup-s6-init
 
@@ -144,21 +145,26 @@ RUN chmod +x /etc/entrypoint.d/20-moodle-bootstrap.sh \
 # ENABLE_PLUGIN_SYNC=TRUE: persist web-UI-installed plugins across container
 # recreation. Captured under /data/plugins, symlinked back into the codebase
 # on boot. PLUGIN_SYNC_INTERVAL is the capture/prune poll period in seconds.
+# MOODLE_AUTO_UPGRADE=TRUE: run admin/cli/upgrade.php on boot when the baked
+# code is newer than the DB. Without it a new image tag can 500 until an admin
+# visits /admin.
 ENV AUTORUN_ENABLED=false \
     SSL_MODE=off \
     ENABLE_MOODLE_CRON=TRUE \
     ENABLE_MOODLE_ADHOC=TRUE \
     ENABLE_PLUGIN_SYNC=TRUE \
+    MOODLE_AUTO_UPGRADE=TRUE \
     PHP_OPCACHE_ENABLE=1 \
     PHP_MAX_INPUT_VARS=5000 \
     APP_BASE_DIR=/var/www/html
 
-# Healthcheck hits /login/index.php (always 200 after install completes;
-# returns a redirect to /install.php while config.php is empty — `curl -f`
-# treats 2xx/3xx as success, only 4xx/5xx fails). start-period=180s gives
-# install.php enough headroom on slow first boots.
+# Healthcheck hits /login/index.php with the Host header from MOODLE_URL —
+# a mismatched host gets a 303 to wwwroot and would mask a broken login page.
+# Wrapper script because HEALTHCHECK doesn't expand env vars. `curl -f` treats
+# 2xx/3xx as success, only 4xx/5xx fails. start-period=180s gives install.php
+# (and upgrade.php on version bumps) headroom on slow boots.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
-    CMD curl -fsS http://localhost:8080/login/index.php -o /dev/null || exit 1
+    CMD ["/usr/local/bin/moodle-healthcheck"]
 
 EXPOSE 8080
 

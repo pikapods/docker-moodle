@@ -139,6 +139,14 @@ default 3-minute cron keep-alive being terminated by the wrapper timeout.
 
 See the [Plugins](#plugins) section for how this works.
 
+### Auto-upgrade
+
+| Var                    | Default | Purpose                                                |
+|------------------------|---------|--------------------------------------------------------|
+| `MOODLE_AUTO_UPGRADE`  | `TRUE`  | Disable with any of `FALSE`/`false`/`0`/`no`/`off`. Skips running `admin/cli/upgrade.php` on boot. |
+
+See [Upgrades](#upgrades) for details.
+
 ### Moodle `config.php` passthrough
 
 Any env var named `MOODLE_CFG_<KEY>` is patched into a managed block inside
@@ -207,8 +215,9 @@ disk!"). To prevent that:
 **Manual / CLI install.** Drop a plugin tree at
 `/data/plugins/<relpath-under-public>` (e.g. `/data/plugins/mod/myplugin`) and
 restart — restore symlinks it into the codebase. Convenient for automated
-provisioning. Then run Moodle's upgrade (visit the admin notifications page or
-`php admin/cli/upgrade.php`) so the DB picks it up.
+provisioning. The boot-time upgrade (see [Upgrades](#upgrades)) installs it
+into the DB; with `MOODLE_AUTO_UPGRADE` off, run `php admin/cli/upgrade.php`
+or visit the admin notifications page.
 
 **Uninstall.** Uninstalling a plugin from the admin UI removes its symlink;
 the next prune pass moves the stored copy to `/data/plugins/.trash/` (kept for
@@ -292,13 +301,20 @@ since later PHP assignments overwrite earlier ones.
 `DB_PREFIX` is honored on first boot only — changing the table prefix on an
 existing install would orphan all data. Set it correctly the first time.
 
-## Major-version upgrades
+## Upgrades
 
-Across minor Moodle versions this image upgrades cleanly: pull a new tag and
-restart. Moodle handles the version-mismatch dialog automatically on first
-admin login.
+Pull a new tag and restart. On every boot the entrypoint checks
+`admin/cli/upgrade.php --is-pending` and, if the baked code is newer than the
+database (Moodle core or any plugin), runs
+`upgrade.php --non-interactive` before the site goes live. A failed upgrade
+stops the container rather than serving a half-upgraded schema; check
+`docker compose logs moodle` for the `[moodle-bootstrap]` lines.
 
-Across major versions (`v5.x` → `v6.x`), run the upgrade CLI once manually:
+Without this, a new code version on an un-upgraded DB can return HTTP 500 on
+`/login/index.php` until an admin visits `/admin`.
+
+Back up the database before switching image tags. To control upgrade timing
+yourself, set `MOODLE_AUTO_UPGRADE=false` and run it manually:
 
 ```bash
 docker compose pull moodle && docker compose up -d moodle
@@ -306,13 +322,11 @@ docker compose exec moodle php /var/www/html/admin/cli/upgrade.php \
     --non-interactive
 ```
 
-This image does not run `upgrade.php` automatically — silent schema upgrades
-across majors are the wrong default for production data.
-
 **5.2 → 5.3:** Moodle 5.3 raises database minimums to MariaDB ≥ 11.4,
-MySQL ≥ 8.4, or PostgreSQL ≥ 17. Upgrade the database before switching the
-image tag. `v5.2.x` tags remain published but no longer receive base-image
-rebuilds.
+MySQL ≥ 8.4, or PostgreSQL ≥ 17. Upgrade the database server first, then
+switch the image tag; the Moodle upgrade (`upgrade.php`) must then run, which
+happens automatically on boot unless `MOODLE_AUTO_UPGRADE` is disabled.
+`v5.2.x` tags remain published but no longer receive base-image rebuilds.
 
 ## Deliberate breaks vs. `bitnami/moodle`
 
@@ -323,7 +337,7 @@ rebuilds.
 | Only `config.php` + `moodledata` + `plugins/` persisted, not the codebase | Image tag upgrades are reliable; no in-volume drift. Web-UI plugins are captured to `/data/plugins` and symlinked back (see [Plugins](#plugins)). |
 | Env vars renamed (`MOODLE_*` → simpler `MOODLE_URL` / `DB_*`)  | Not drop-in compatible. Document migration if you need it. |
 | `ENABLE_MOODLE_CRON` defaults `TRUE`                           | Moodle is broken without it.                               |
-| No auto-`upgrade.php` across majors                            | Silent schema upgrades are wrong for production data.      |
+| `upgrade.php` runs on boot when pending (`MOODLE_AUTO_UPGRADE`) | A new tag on an un-upgraded DB 500s; opt out to upgrade manually. |
 
 ## Building locally
 

@@ -264,8 +264,20 @@ def test_managed_block_idempotent_across_restart(stack):
 def test_logs_clean(stack):
     logs = _sh("docker", "logs", stack["moodle"], check=False)
     combined = logs.stdout + logs.stderr
-    bad = re.findall(r"RuntimeException|PHP Fatal|admin/cli/install\.php failed", combined)
+    bad = re.findall(r"RuntimeException|PHP Fatal|admin/cli/(install|upgrade)\.php failed", combined)
     assert not bad, f"bad patterns in container logs: {bad[:5]}"
+
+
+def test_upgrade_check_ran(stack):
+    logs = _sh("docker", "logs", stack["moodle"], check=False)
+    assert "no upgrade pending" in logs.stdout + logs.stderr, (
+        "bootstrap did not report the upgrade check after first-boot install"
+    )
+
+
+def test_healthcheck_script_passes(stack):
+    r = _exec(stack["moodle"], "/usr/local/bin/moodle-healthcheck")
+    assert r.returncode == 0, f"healthcheck failed: {r.stdout!r} {r.stderr!r}"
 
 
 def test_cron_longrun_alive(stack):

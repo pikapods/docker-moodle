@@ -292,4 +292,29 @@ rm -f "$BLOCK_TMP"
 restore_plugins || log "WARN: plugin restore failed (continuing)"
 capture_plugins || log "WARN: plugin capture failed (continuing)"
 
+# ---------------------------------------------------------------------------
+# 7. Auto-upgrade — after plugin restore so restored plugins are installed or
+#    upgraded in the same pass. --is-pending exits 2 when an upgrade is due.
+#    A failed upgrade is fatal; serving a half-upgraded schema is worse.
+# ---------------------------------------------------------------------------
+case "${MOODLE_AUTO_UPGRADE:-TRUE}" in
+    [Ff][Aa][Ll][Ss][Ee]|0|[Nn][Oo]|[Nn]|[Oo][Ff][Ff])
+        log "MOODLE_AUTO_UPGRADE disabled; skipping upgrade check"
+        ;;
+    *)
+        rc=0
+        php "$APP_DIR/admin/cli/upgrade.php" --is-pending >/dev/null 2>&1 || rc=$?
+        case "$rc" in
+            0) log "no upgrade pending" ;;
+            2)
+                log "upgrade pending; running admin/cli/upgrade.php"
+                php "$APP_DIR/admin/cli/upgrade.php" --non-interactive --allow-unstable >&2 \
+                    || die "admin/cli/upgrade.php failed"
+                log "upgrade complete"
+                ;;
+            *) log "WARN: upgrade.php --is-pending exited $rc (continuing)" ;;
+        esac
+        ;;
+esac
+
 log "bootstrap complete"

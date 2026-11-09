@@ -1,0 +1,5 @@
+#!/bin/sh
+# Strip scheme and path: Host must be bare host[:port].
+host=${MOODLE_URL#*://}
+host=${host%%/*}
+exec curl -fsS -o /dev/null -H "Host: $host" http://localhost:8080/login/index.php

@@ -53,6 +53,12 @@ class TestImageMetadata:
     def test_healthcheck_defined(self, inspect):
         assert inspect["Config"].get("Healthcheck"), "no Healthcheck defined"
 
+    def test_healthcheck_uses_wrapper(self, inspect):
+        test = inspect["Config"]["Healthcheck"].get("Test") or []
+        assert "/usr/local/bin/moodle-healthcheck" in " ".join(test), (
+            f"healthcheck does not use wrapper: {test!r}"
+        )
+
     def test_exposes_8080(self, inspect):
         ports = inspect["Config"].get("ExposedPorts") or {}
         assert "8080/tcp" in ports, f"8080/tcp not exposed; got {list(ports)}"
@@ -68,6 +74,7 @@ class TestImageMetadata:
         assert env.get("ENABLE_MOODLE_CRON") == "TRUE"
         assert env.get("ENABLE_MOODLE_ADHOC") == "TRUE"
         assert env.get("ENABLE_PLUGIN_SYNC") == "TRUE"
+        assert env.get("MOODLE_AUTO_UPGRADE") == "TRUE"
         assert env.get("PHP_OPCACHE_ENABLE") == "1"
         assert env.get("PHP_MAX_INPUT_VARS") == "5000"
         assert env.get("APP_BASE_DIR") == "/var/www/html"
@@ -104,6 +111,10 @@ class TestImageFilesystem:
         assert r.returncode == 0, r.stderr
         modules = {line.strip() for line in r.stdout.splitlines() if line.strip()}
         assert ext in modules, f"PHP module {ext!r} not loaded; got {sorted(modules)}"
+
+    def test_healthcheck_script_executable(self):
+        r = _run("test", "-x", "/usr/local/bin/moodle-healthcheck")
+        assert r.returncode == 0, "moodle-healthcheck missing or not executable"
 
     def test_s6_cron_run_executable(self):
         r = _run("test", "-x", "/etc/s6-overlay/s6-rc.d/moodle-cron/run")
